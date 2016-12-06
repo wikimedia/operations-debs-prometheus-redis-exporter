@@ -1,0 +1,46 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE=1
+export DH_GOPKG := github.com/oliver006/redis_exporter
+
+METAPKG := github.com/prometheus/common
+
+DEBVERS    ?= $(shell dpkg-parsechangelog | sed -n -e 's/^Version: //p')
+VERSION    ?= $(shell echo '$(DEBVERS)' | sed 's/^[[:digit:]]*://; s/[-].*//')
+DEBPKGNAME ?= $(shell dpkg-parsechangelog | sed -n -e 's/^Source: //p')
+BUILDDIR := $(shell perl -w -MDebian::Debhelper::Buildsystem::golang -e \
+        'print Debian::Debhelper::Buildsystem::golang->new()->get_builddir()')
+REV        := $(DEBVERS)
+BRANCH     := debian/sid
+USER       := pkg-go-maintainers@lists.alioth.debian.org
+HOSTNAME   := debian
+BUILD_DATE := $(shell date --utc --date='$(DEBDATE)' +%Y%m%d-%H:%M:%S)
+GO_VERSION := $(shell go version | sed 's/go version \(\S*\).*/\1/')
+BUILDFLAGS := -ldflags \
+  " -X main.VERSION=$(DEBVERS)\
+    -X main.BUILD_DATE=$(BUILD_DATE)\
+    -X main.COMMIT_SHA1=000000"
+
+
+%:
+	dh $@ --buildsystem=golang --with=golang,systemd
+
+# Most tests require a running redis, skip for now
+override_dh_auto_test:
+
+override_dh_auto_build:
+	dh_auto_build -O--buildsystem=golang -- $(BUILDFLAGS)
+
+override_dh_auto_install:
+	dh_auto_install
+	# we don't want the golang source (yet?)
+	rm -r debian/$(DEBPKGNAME)/usr/share/gocode
+	# Rename the binary to match the debian package.
+	mv -v debian/$(DEBPKGNAME)/usr/bin/redis_exporter \
+            debian/$(DEBPKGNAME)/usr/bin/$(DEBPKGNAME)
+
+gen-orig-tgz:
+	if [ ! -f ../$(DEBPKGNAME)_$(VERSION).orig.tar.gz ] ; then \
+	    git archive --format=tar.gz --prefix=$(DEBPKGNAME)-$(VERSION)/ \
+                upstream/$(VERSION) >../$(DEBPKGNAME)_$(VERSION).orig.tar.gz ; \
+	fi

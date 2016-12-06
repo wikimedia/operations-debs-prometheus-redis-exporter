@@ -1,0 +1,27 @@
+#ARGS=''
+
+# Environment-equivalent of -redis.password / -redis.addr
+#REDIS_PASSWORD=''
+#REDIS_ADDR=''
+
+# Usage of prometheus-redis-exporter:
+#  -check-keys string
+#    	Comma separated list of keys to export value and length/size
+#  -debug
+#    	Output verbose debug information
+#  -log-format string
+#    	Log format, valid options are txt and json (default "txt")
+#  -namespace string
+#    	Namespace for metrics (default "redis")
+#  -redis.addr string
+#    	Address of one or more redis nodes, separated by separator (default "redis://localhost:6379")
+#  -redis.password string
+#    	Password for one or more redis nodes, separated by separator
+#  -separator string
+#    	separator used to split redis.addr and redis.password into several elements. (default ",")
+#  -version
+#    	Show version information and exit
+#  -web.listen-address string
+#    	Address to listen on for web interface and telemetry. (default ":9121")
+#  -web.telemetry-path string
+#    	Path under which to expose metrics. (default "/metrics")

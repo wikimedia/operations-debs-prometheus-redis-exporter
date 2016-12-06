@@ -1,0 +1,6 @@
+prometheus-redis-exporter (0.10.3-1) unstable; urgency=medium
+
+  * Initial packaging
+    + Tests require a local redis running, skip for now
+
+ -- Filippo Giunchedi <filippo@debian.org>  Mon, 10 Oct 2016 12:42:38 +0100

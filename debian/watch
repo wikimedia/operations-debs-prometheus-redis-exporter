@@ -1,0 +1,5 @@
+version=3
+
+opts="filenamemangle=s/(?:.*\/)?v?(\d[\d\.]*)\.tar\.gz/prometheus-redis-exporter-$1.tar.gz/,dversionmangle=s/\+ds\d*$//" \
+         https://github.com/oliver006/redis_exporter/tags \
+         (?:.*/)?v?(\d[\d\.]*)\.tar\.gz
