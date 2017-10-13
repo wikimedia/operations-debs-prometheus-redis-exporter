@@ -17,6 +17,7 @@ import (
 type RedisHost struct {
 	Addrs     []string
 	Passwords []string
+	Aliases   []string
 }
 
 type dbKeyPair struct {
@@ -42,6 +43,7 @@ type scrapeResult struct {
 	Name  string
 	Value float64
 	Addr  string
+	Alias string
 	DB    string
 }
 
@@ -49,17 +51,19 @@ var (
 	metricMap = map[string]string{
 		// # Server
 		"uptime_in_seconds": "uptime_in_seconds",
+		"process_id":        "process_id",
 
 		// # Clients
-		"connected_clients": "connected_clients",
-		"blocked_clients":   "blocked_clients",
+		"connected_clients":          "connected_clients",
+		"blocked_clients":            "blocked_clients",
+		"client_longest_output_list": "client_longest_output_list",
 
 		// # Memory
 		"used_memory":             "memory_used_bytes",
 		"used_memory_rss":         "memory_used_rss_bytes",
 		"used_memory_peak":        "memory_used_peak_bytes",
 		"used_memory_lua":         "memory_used_lua_bytes",
-		"max_memory":              "memory_max_bytes",
+		"maxmemory":               "memory_max_bytes",
 		"mem_fragmentation_ratio": "memory_fragmentation_ratio",
 
 		// # Persistence
@@ -84,50 +88,77 @@ var (
 		"keyspace_misses":            "keyspace_misses_total",
 		"pubsub_channels":            "pubsub_channels",
 		"pubsub_patterns":            "pubsub_patterns",
+		"instantaneous_ops_per_sec":  "instantaneous_ops_per_sec",
+		"latest_fork_usec":           "latest_fork_usec",
 
 		// # Replication
-		"loading":           "loading_dump_file",
-		"connected_slaves":  "connected_slaves",
-		"repl_backlog_size": "replication_backlog_bytes",
+		"loading":                    "loading_dump_file",
+		"connected_slaves":           "connected_slaves",
+		"repl_backlog_size":          "replication_backlog_bytes",
+		"master_last_io_seconds_ago": "master_last_io_seconds",
+		"master_repl_offset":         "master_repl_offset",
 
 		// # CPU
 		"used_cpu_sys":           "used_cpu_sys",
 		"used_cpu_user":          "used_cpu_user",
 		"used_cpu_sys_children":  "used_cpu_sys_children",
 		"used_cpu_user_children": "used_cpu_user_children",
+
+		// # Cluster
+		"cluster_stats_messages_sent":     "cluster_messages_sent_total",
+		"cluster_stats_messages_received": "cluster_messages_received_total",
 	}
+
+	instanceInfoFields = map[string]bool{"redis_version": true, "redis_build_id": true, "redis_mode": true, "os": true}
 )
 
 func (e *Exporter) initGauges() {
 
 	e.metrics = map[string]*prometheus.GaugeVec{}
+	e.metrics["instance_info"] = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: e.namespace,
+		Name:      "instance_info",
+		Help:      "Information about the Redis instance",
+	}, []string{"addr", "alias", "redis_version", "redis_build_id", "redis_mode", "os"})
 	e.metrics["db_keys"] = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: e.namespace,
 		Name:      "db_keys",
 		Help:      "Total number of keys by DB",
-	}, []string{"addr", "db"})
+	}, []string{"addr", "alias", "db"})
 	e.metrics["db_keys_expiring"] = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: e.namespace,
 		Name:      "db_keys_expiring",
 		Help:      "Total number of expiring keys by DB",
-	}, []string{"addr", "db"})
+	}, []string{"addr", "alias", "db"})
 	e.metrics["db_avg_ttl_seconds"] = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: e.namespace,
 		Name:      "db_avg_ttl_seconds",
 		Help:      "Avg TTL in seconds",
-	}, []string{"addr", "db"})
+	}, []string{"addr", "alias", "db"})
+
+	// Latency info
+	e.metrics["latency_spike_last"] = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: e.namespace,
+		Name:      "latency_spike_last",
+		Help:      "When the latency spike last occured",
+	}, []string{"addr", "alias", "event_name"})
+	e.metrics["latency_spike_milliseconds"] = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: e.namespace,
+		Name:      "latency_spike_milliseconds",
+		Help:      "Length of the last latency spike in milliseconds",
+	}, []string{"addr", "alias", "event_name"})
 
 	// Emulate a Summary.
 	e.metrics["command_call_duration_seconds_count"] = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: e.namespace,
 		Name:      "command_call_duration_seconds_count",
 		Help:      "Total number of calls per command",
-	}, []string{"addr", "cmd"})
+	}, []string{"addr", "alias", "cmd"})
 	e.metrics["command_call_duration_seconds_sum"] = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: e.namespace,
 		Name:      "command_call_duration_seconds_sum",
 		Help:      "Total amount of time in seconds spent per command",
-	}, []string{"addr", "cmd"})
+	}, []string{"addr", "alias", "cmd"})
 }
 
 // NewRedisExporter returns a new exporter of Redis metrics.
@@ -141,12 +172,12 @@ func NewRedisExporter(host RedisHost, namespace, checkKeys string) (*Exporter, e
 			Namespace: namespace,
 			Name:      "key_value",
 			Help:      "The value of \"key\"",
-		}, []string{"db", "key"}),
+		}, []string{"addr", "alias", "db", "key"}),
 		keySizes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "key_size",
 			Help:      "The length or size of \"key\"",
-		}, []string{"db", "key"}),
+		}, []string{"addr", "alias", "db", "key"}),
 		duration: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "exporter_last_scrape_duration_seconds",
@@ -236,6 +267,11 @@ func includeMetric(s string) bool {
 	return ok
 }
 
+func sanitizeMetricName(n string) string {
+	n = strings.Replace(n, "-", "_", -1)
+	return n
+}
+
 func extractVal(s string) (val float64, err error) {
 	split := strings.Split(s, "=")
 	if len(split) != 2 {
@@ -284,9 +320,11 @@ func parseDBKeyspaceString(db string, stats string) (keysTotal float64, keysExpi
 	return
 }
 
-func (e *Exporter) extractInfoMetrics(info, addr string, scrapes chan<- scrapeResult) error {
+func (e *Exporter) extractInfoMetrics(info, addr string, alias string, scrapes chan<- scrapeResult) error {
 	cmdstats := false
 	lines := strings.Split(info, "\r\n")
+
+	instanceInfo := map[string]string{}
 	for _, line := range lines {
 		log.Debugf("info: %s", line)
 		if len(line) > 0 && line[0] == '#' {
@@ -302,6 +340,11 @@ func (e *Exporter) extractInfoMetrics(info, addr string, scrapes chan<- scrapeRe
 		}
 
 		split := strings.Split(line, ":")
+		if _, ok := instanceInfoFields[split[0]]; ok {
+			instanceInfo[split[0]] = split[1]
+			continue
+		}
+
 		if len(split) != 2 || !includeMetric(split[0]) {
 			continue
 		}
@@ -335,22 +378,22 @@ func (e *Exporter) extractInfoMetrics(info, addr string, scrapes chan<- scrapeRe
 			}
 
 			e.metricsMtx.RLock()
-			e.metrics["command_call_duration_seconds_count"].WithLabelValues(addr, cmd).Set(calls)
-			e.metrics["command_call_duration_seconds_sum"].WithLabelValues(addr, cmd).Set(usecTotal / 1e6)
+			e.metrics["command_call_duration_seconds_count"].WithLabelValues(addr, alias, cmd).Set(calls)
+			e.metrics["command_call_duration_seconds_sum"].WithLabelValues(addr, alias, cmd).Set(usecTotal / 1e6)
 			e.metricsMtx.RUnlock()
 			continue
 		}
 
 		if keysTotal, keysEx, avgTTL, ok := parseDBKeyspaceString(split[0], split[1]); ok {
-			scrapes <- scrapeResult{Name: "db_keys", Addr: addr, DB: split[0], Value: keysTotal}
-			scrapes <- scrapeResult{Name: "db_keys_expiring", Addr: addr, DB: split[0], Value: keysEx}
+			scrapes <- scrapeResult{Name: "db_keys", Addr: addr, Alias: alias, DB: split[0], Value: keysTotal}
+			scrapes <- scrapeResult{Name: "db_keys_expiring", Addr: addr, Alias: alias, DB: split[0], Value: keysEx}
 			if avgTTL > -1 {
-				scrapes <- scrapeResult{Name: "db_avg_ttl_seconds", Addr: addr, DB: split[0], Value: avgTTL}
+				scrapes <- scrapeResult{Name: "db_avg_ttl_seconds", Addr: addr, Alias: alias, DB: split[0], Value: avgTTL}
 			}
 			continue
 		}
 
-		metricName := split[0]
+		metricName := sanitizeMetricName(split[0])
 		if newName, ok := metricMap[metricName]; ok {
 			metricName = newName
 		}
@@ -375,86 +418,103 @@ func (e *Exporter) extractInfoMetrics(info, addr string, scrapes chan<- scrapeRe
 			continue
 		}
 
-		scrapes <- scrapeResult{Name: metricName, Addr: addr, Value: val}
+		scrapes <- scrapeResult{Name: metricName, Addr: addr, Alias: alias, Value: val}
 	}
+
+	e.metricsMtx.RLock()
+	e.metrics["instance_info"].WithLabelValues(
+		addr, alias,
+		instanceInfo["redis_version"],
+		instanceInfo["redis_build_id"],
+		instanceInfo["redis_mode"],
+		instanceInfo["os"],
+	).Set(1)
+	e.metricsMtx.RUnlock()
+
 	return nil
 }
 
-func extractConfigMetrics(config []string, addr string, scrapes chan<- scrapeResult) error {
-
-	if len(config)%2 != 0 {
-		return fmt.Errorf("invalid config: %#v", config)
+func (e *Exporter) scrapeRedisHost(scrapes chan<- scrapeResult, addr string, idx int) error {
+	options := []redis.DialOption{
+		redis.DialConnectTimeout(5 * time.Second),
+		redis.DialReadTimeout(5 * time.Second),
+		redis.DialWriteTimeout(5 * time.Second),
 	}
 
-	for pos := 0; pos < len(config)/2; pos++ {
-		val, err := strconv.ParseFloat(config[pos*2+1], 64)
+	if len(e.redis.Passwords) > idx && e.redis.Passwords[idx] != "" {
+		options = append(options, redis.DialPassword(e.redis.Passwords[idx]))
+	}
+
+	log.Debugf("Trying DialURL(): %s", addr)
+	c, err := redis.DialURL(addr, options...)
+
+	if err != nil {
+		log.Debugf("DialURL() failed, err: %s", err)
+		if frags := strings.Split(addr, "://"); len(frags) == 2 {
+			log.Debugf("Trying: Dial(): %s %s", frags[0], frags[1])
+			c, err = redis.Dial(frags[0], frags[1], options...)
+		} else {
+			log.Debugf("Trying: Dial(): tcp %s", addr)
+			c, err = redis.Dial("tcp", addr, options...)
+		}
+	}
+
+	if err != nil {
+		log.Printf("redis err: %s", err)
+		return err
+	}
+
+	defer c.Close()
+	log.Debugf("connected to: %s", addr)
+
+	info, err := redis.String(c.Do("INFO", "ALL"))
+	if err == nil {
+		e.extractInfoMetrics(info, addr, e.redis.Aliases[idx], scrapes)
+	} else {
+		log.Printf("redis err: %s", err)
+		return err
+	}
+
+	if strings.Index(info, "cluster_enabled:1") != -1 {
+		info, err = redis.String(c.Do("CLUSTER", "INFO"))
 		if err != nil {
-			log.Debugf("couldn't parse %s, err: %s", config[pos*2+1], err)
+			log.Printf("redis err: %s", err)
+		} else {
+			e.extractInfoMetrics(info, addr, e.redis.Aliases[idx], scrapes)
+		}
+	}
+
+	if reply, err := c.Do("LATENCY", "LATEST"); err == nil {
+		var eventName string
+		var spikeLast, milliseconds, max int64
+		if tempVal, _ := reply.([]interface{}); len(tempVal) > 0 {
+			latencyResult := tempVal[0].([]interface{})
+			if _, err := redis.Scan(latencyResult, &eventName, &spikeLast, &milliseconds, &max); err == nil {
+				e.metricsMtx.RLock()
+				e.metrics["latency_spike_last"].WithLabelValues(addr, e.redis.Aliases[idx], eventName).Set(float64(spikeLast))
+				e.metrics["latency_spike_milliseconds"].WithLabelValues(addr, e.redis.Aliases[idx], eventName).Set(float64(milliseconds))
+				e.metricsMtx.RUnlock()
+			}
+		}
+	}
+
+	for _, k := range e.keys {
+		if _, err := c.Do("SELECT", k.db); err != nil {
 			continue
 		}
-		scrapes <- scrapeResult{Name: fmt.Sprintf("config_%s", config[pos*2]), Addr: addr, Value: val}
-	}
-	return nil
-}
 
-func (e *Exporter) scrape(scrapes chan<- scrapeResult) {
-
-	defer close(scrapes)
-	now := time.Now().UnixNano()
-	e.totalScrapes.Inc()
-
-	errorCount := 0
-	for idx, addr := range e.redis.Addrs {
-		var c redis.Conn
-		var err error
-
-		var options []redis.DialOption
-		if len(e.redis.Passwords) > idx && e.redis.Passwords[idx] != "" {
-			options = append(options, redis.DialPassword(e.redis.Passwords[idx]))
-		}
-
-		log.Debugf("Trying DialURL(): %s", addr)
-		if c, err = redis.DialURL(addr, options...); err != nil {
-			log.Debugf("DialURL() failed, err: %s", err)
-			frags := strings.Split(addr, "://")
-			if len(frags) == 2 {
-				log.Debugf("Trying: Dial(): %s %s", frags[0], frags[1])
-				c, err = redis.Dial(frags[0], frags[1], options...)
-			} else {
-				log.Debugf("Trying: Dial(): tcp %s", addr)
-				c, err = redis.Dial("tcp", addr, options...)
+		obtainedKeys := []string{}
+		if tempVal, err := redis.Strings(c.Do("KEYS", k.key)); err == nil && tempVal != nil {
+			for _, tempKey := range tempVal {
+				log.Debugf("Append result: %s", tempKey)
+				obtainedKeys = append(obtainedKeys, tempKey)
 			}
 		}
 
-		if err != nil {
-			log.Printf("redis err: %s", err)
-			errorCount++
-			continue
-		}
-		defer c.Close()
-		log.Debugf("connected to: %s", addr)
-
-		info, err := redis.String(c.Do("INFO", "ALL"))
-		if err == nil {
-			err = e.extractInfoMetrics(info, addr, scrapes)
-		}
-		if err != nil {
-			log.Printf("redis err: %s", err)
-			errorCount++
-			continue
-		}
-
-		if config, err := redis.Strings(c.Do("CONFIG", "GET", "maxmemory")); err == nil {
-			extractConfigMetrics(config, addr, scrapes)
-		}
-
-		for _, k := range e.keys {
-			if _, err := c.Do("SELECT", k.db); err != nil {
-				continue
-			}
-			if tempVal, err := c.Do("GET", k.key); err == nil && tempVal != nil {
+		for _, key := range obtainedKeys {
+			if tempVal, err := c.Do("GET", key); err == nil && tempVal != nil {
 				if val, err := strconv.ParseFloat(fmt.Sprintf("%s", tempVal), 64); err == nil {
-					e.keyValues.WithLabelValues("db"+k.db, k.key).Set(val)
+					e.keyValues.WithLabelValues(addr, e.redis.Aliases[idx], "db"+k.db, key).Set(val)
 				}
 			}
 
@@ -466,12 +526,32 @@ func (e *Exporter) scrape(scrapes chan<- scrapeResult) {
 				"PFCOUNT",
 				"STRLEN",
 			} {
-				if tempVal, err := c.Do(op, k.key); err == nil && tempVal != nil {
-					e.keySizes.WithLabelValues("db"+k.db, k.key).Set(float64(tempVal.(int64)))
+				if tempVal, err := c.Do(op, key); err == nil && tempVal != nil {
+					e.keySizes.WithLabelValues(addr, e.redis.Aliases[idx], "db"+k.db, key).Set(float64(tempVal.(int64)))
 					break
 				}
 			}
 		}
+	}
+
+	return nil
+}
+
+func (e *Exporter) scrape(scrapes chan<- scrapeResult) {
+
+	defer close(scrapes)
+	now := time.Now().UnixNano()
+	e.totalScrapes.Inc()
+
+	errorCount := 0
+	for idx, addr := range e.redis.Addrs {
+
+		var up float64 = 1
+		if err := e.scrapeRedisHost(scrapes, addr, idx); err != nil {
+			errorCount++
+			up = 0
+		}
+		scrapes <- scrapeResult{Name: "up", Addr: addr, Alias: e.redis.Aliases[idx], Value: up}
 	}
 
 	e.scrapeErrors.Set(float64(errorCount))
@@ -486,10 +566,10 @@ func (e *Exporter) setMetrics(scrapes <-chan scrapeResult) {
 			e.metrics[name] = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 				Namespace: e.namespace,
 				Name:      name,
-			}, []string{"addr"})
+			}, []string{"addr", "alias"})
 			e.metricsMtx.Unlock()
 		}
-		var labels prometheus.Labels = map[string]string{"addr": scr.Addr}
+		var labels prometheus.Labels = map[string]string{"addr": scr.Addr, "alias": scr.Alias}
 		if len(scr.DB) > 0 {
 			labels["db"] = scr.DB
 		}

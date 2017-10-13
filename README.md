@@ -46,6 +46,8 @@ log-format         | Log format, valid options are `txt` (default) and `json`.
 check-keys         | Comma separated list of keys to export value and length/size, eg: `db3=user_count` will export key `user_count` from db `3`. db defaults to `0` if omitted. 
 redis.addr         | Address of one or more redis nodes, comma separated, defaults to `redis://localhost:6379`.
 redis.password     | Password to use when authenticating to Redis
+redis.alias        | Alias for redis node addr, comma separated.
+redis.file         | Path to file containing one or more redis nodes, separated by newline. This option is mutually exclusive with redis.addr. Each line can optionally be comma-separated with the fields <addr>,<password>,<alias>.
 namespace          | Namespace for the metrics, defaults to `redis`.
 web.listen-address | Address to listen on for web interface and telemetry, defaults to `0.0.0.0:9121`.
 web.telemetry-path | Path under which to expose metrics, defaults to `metrics`.
@@ -62,6 +64,8 @@ Name               | Description
 -------------------|------------
 REDIS_ADDR         | Address of Redis node(s)
 REDIS_PASSWORD     | Password to use when authenticating to Redis
+REDIS_ALIAS        | Alias name of Redis node(s)
+REDIS_FILE         | Path to file containing Redis node(s)
 
 ### What's exported?
 
@@ -76,9 +80,9 @@ Example [Grafana](http://grafana.org/) screenshots:<br>
 <img width="800" alt="redis_exporter_screen" src="https://cloud.githubusercontent.com/assets/1222339/19412031/897549c6-92da-11e6-84a0-b091f9deb81d.png"><br>
 <img width="800" alt="redis_exporter_screen_02" src="https://cloud.githubusercontent.com/assets/1222339/19412041/dee6d7bc-92da-11e6-84f8-610c025d6182.png">
 
-Grafana dashboard is available on [grafana.net](https://grafana.net/dashboards/763) and/or [github.com](https://github.com/oliver006/redis_exporter/blob/master/grafana_prometheus_redis_dashboard.json).
+Grafana dashboard is available on [grafana.net](https://grafana.net/dashboards/763) and/or [github.com](contrib/grafana_prometheus_redis_dashboard.json).
 
-
+Grafana dashboard with host & alias selector is available on [github.com](contrib/grafana_prometheus_redis_dashboard_alias.json).
 
 ### What else?
 
