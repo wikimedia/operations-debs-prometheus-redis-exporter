@@ -1,3 +1,9 @@
+prometheus-redis-exporter (0.13-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Filippo Giunchedi <filippo@debian.org>  Thu, 16 Nov 2017 13:35:54 +0100
+
 prometheus-redis-exporter (0.12.2-1) unstable; urgency=medium
 
   * New upstream release
